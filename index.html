@@ -32,26 +32,79 @@
             font-size: 0.875rem;
             color: #9ca3af;
         }
+
+        .controls {
+            margin-top: 1rem;
+        }
+
+        .controls button {
+            padding: 0.4rem 0.8rem;
+            border-radius: 0.375rem;
+            border: 1px solid #4b5563;
+            background: #111827;
+            color: #e5e7eb;
+            font-size: 0.9rem;
+            cursor: pointer;
+        }
+
+        .controls button:hover {
+            background: #1f2937;
+        }
+
+        /* Bottom-left corner controls */
+        .corner-controls {
+            position: fixed;
+            bottom: 1rem;
+            left: 1rem;
+            display: flex;
+            gap: 0.5rem;
+            font-size: 0.8rem;
+        }
+
+        .corner-controls button {
+            padding: 0.25rem 0.6rem;
+            border-radius: 0.375rem;
+            border: 1px solid #4b5563;
+            background: #020617;
+            color: #9ca3af;
+            cursor: pointer;
+        }
+
+        .corner-controls button:hover {
+            background: #111827;
+            color: #e5e7eb;
+        }
     </style>
 </head>
 <body>
 <div class="wrapper">
     <div id="countdown">--L+--H</div>
-    <div class="note">Times are in Pacific (auto DST)</div>
+    <div class="controls">
+        <button id="lock-lunch-btn" type="button">Lock lunch now</button>
+    </div>
+</div>
+
+<!-- Bottom-left small controls -->
+<div class="corner-controls">
+    <button id="reset-lunch-btn" type="button">Reset lunch lock</button>
+    <button id="set-lunch-manual-btn" type="button">Set lunch minutes…</button>
 </div>
 
 <script>
+    const NOON_MINUTES = 12 * 60; // 12:00
+    const FIVE_PM_MINUTES = 17 * 60; // 17:00
+    const LUNCH_LOCK_KEY = "lunchLock"; // key in localStorage
+
     // Format integer with explicit sign for positive numbers
     function formatWithSign(minutes) {
         if (minutes > 0) return "+" + minutes;
-        return minutes.toString(); // handles 0 and negatives
+        return minutes.toString(); // 0 or negative
     }
 
-    // Get current time in America/Los_Angeles as year, month, day, hour, minute
+    // Get current time in America/Los_Angeles as components
     function getPacificComponents() {
         const now = new Date();
 
-        // Use Intl to convert to Pacific with DST awareness
         const formatter = new Intl.DateTimeFormat("en-US", {
             timeZone: "America/Los_Angeles",
             year: "numeric",
@@ -74,17 +127,57 @@
         };
     }
 
+    // Build a YYYY-MM-DD string for Pacific date
+    function getPacificDateKey(pac) {
+        const m = pac.month.toString().padStart(2, "0");
+        const d = pac.day.toString().padStart(2, "0");
+        return pac.year + "-" + m + "-" + d;
+    }
+
+    // Read lunch lock (if any) from localStorage
+    function getLunchLock() {
+        try {
+            const raw = localStorage.getItem(LUNCH_LOCK_KEY);
+            if (!raw) return null;
+            return JSON.parse(raw);
+        } catch (e) {
+            return null;
+        }
+    }
+
+    // Save lunch lock for today
+    function setLunchLock(dateKey, minutes) {
+        const payload = { date: dateKey, minutes: minutes };
+        localStorage.setItem(LUNCH_LOCK_KEY, JSON.stringify(payload));
+    }
+
+    // Clear stored lunch lock
+    function clearLunchLock() {
+        localStorage.removeItem(LUNCH_LOCK_KEY);
+    }
+
     function updateCountdown() {
         const pac = getPacificComponents();
+        const todayKey = getPacificDateKey(pac);
 
-        // Minutes since midnight Pacific
         const nowMinutes = pac.hour * 60 + pac.minute;
 
-        const NOON_MINUTES = 12 * 60; // 12:00
-        const FIVE_PM_MINUTES = 17 * 60; // 17:00
+        // LUNCH (L) SIDE
+        const stored = getLunchLock();
+        let diffToNoon;
 
-        // Difference in minutes from current time to today's noon and 5 PM
-        const diffToNoon = NOON_MINUTES - nowMinutes;
+        if (stored && stored.date === todayKey) {
+            // Frozen value for today
+            diffToNoon = stored.minutes;
+        } else {
+            // No stored value or from previous day
+            if (stored && stored.date !== todayKey) {
+                clearLunchLock();
+            }
+            diffToNoon = NOON_MINUTES - nowMinutes;
+        }
+
+        // HOME (H) SIDE
         const diffToFive = FIVE_PM_MINUTES - nowMinutes;
 
         const noonPart = formatWithSign(diffToNoon) + "L";
@@ -93,10 +186,51 @@
         document.getElementById("countdown").textContent = noonPart + fivePart;
     }
 
-    // Run once immediately
+    function lockLunchNow() {
+        const pac = getPacificComponents();
+        const todayKey = getPacificDateKey(pac);
+        const nowMinutes = pac.hour * 60 + pac.minute;
+        const diffToNoon = NOON_MINUTES - nowMinutes;
+
+        setLunchLock(todayKey, diffToNoon);
+        updateCountdown();
+    }
+
+    function resetLunchForToday() {
+        // Just clear the lock; on next update it will go back to live count
+        clearLunchLock();
+        updateCountdown();
+    }
+
+    function setLunchManual() {
+        const pac = getPacificComponents();
+        const todayKey = getPacificDateKey(pac);
+
+        const input = prompt("Enter lunch offset in minutes (positive or negative):", "0");
+        if (input === null) {
+            // User cancelled
+            return;
+        }
+
+        const minutes = Number(input);
+        if (!Number.isFinite(minutes) || !Number.isInteger(minutes)) {
+            alert("Please enter a whole number of minutes (e.g. -7, 0, 15).");
+            return;
+        }
+
+        setLunchLock(todayKey, minutes);
+        updateCountdown();
+    }
+
+    // Wire up buttons
+    document.getElementById("lock-lunch-btn").addEventListener("click", lockLunchNow);
+    document.getElementById("reset-lunch-btn").addEventListener("click", resetLunchForToday);
+    document.getElementById("set-lunch-manual-btn").addEventListener("click", setLunchManual);
+
+    // Initial draw
     updateCountdown();
 
-    // Update every minute
+    // Update every minute (H side keeps ticking, L side only if not locked)
     setInterval(updateCountdown, 60 * 1000);
 </script>
 </body>
