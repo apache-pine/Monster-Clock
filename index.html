@@ -228,11 +228,21 @@
     document.getElementById("reset-lunch-btn").addEventListener("click", resetLunchForToday);
     document.getElementById("set-lunch-manual-btn").addEventListener("click", setLunchManual);
 
-    // Initial draw
-    updateCountdown();
+    function tick() {
+        // Update display
+        updateCountdown();
 
-    // Update every minute (H side keeps ticking, L side only if not locked)
-    setInterval(updateCountdown, 60 * 1000);
+        // Schedule next tick at the start of the next minute
+        const now = new Date();
+        const msToNextMinute = (60 - now.getSeconds()) * 1000 - now.getMilliseconds();
+        const delay = msToNextMinute <= 0 ? 1000 : msToNextMinute; // safety
+
+        setTimeout(tick, delay);
+    }
+
+    // Start aligned to the minute boundary
+    tick();
+
 </script>
 </body>
 </html>
