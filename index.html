@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Lunch / Home Countdown</title>
+    <title>Session Utility Clock</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <link rel="icon" href="clock.png" type="image/png">
 
@@ -81,14 +81,14 @@
 <div class="wrapper">
     <div id="countdown">--L+--H</div>
     <div class="controls">
-        <button id="lock-lunch-btn" type="button">Lock lunch now</button>
+        <button id="lock-lunch-btn" type="button">Freeze Checkpoint</button>
     </div>
 </div>
 
 <!-- Bottom-left small controls -->
 <div class="corner-controls">
-    <button id="reset-lunch-btn" type="button">Reset lunch lock</button>
-    <button id="set-lunch-manual-btn" type="button">Set lunch minutes…</button>
+    <button id="reset-lunch-btn" type="button">Reset Checkpoint</button>
+    <button id="set-lunch-manual-btn" type="button">Manually Set Checkpoint</button>
 </div>
 
 <script>
@@ -207,7 +207,7 @@
         const pac = getPacificComponents();
         const todayKey = getPacificDateKey(pac);
 
-        const input = prompt("Enter lunch offset in minutes (positive or negative):", "0");
+        const input = prompt("Enter Checkpoint offset (positive or negative):", "0");
         if (input === null) {
             // User cancelled
             return;
@@ -215,7 +215,7 @@
 
         const minutes = Number(input);
         if (!Number.isFinite(minutes) || !Number.isInteger(minutes)) {
-            alert("Please enter a whole number of minutes (e.g. -7, 0, 15).");
+            alert("Please enter a whole number (e.g. -7, 0, 15).");
             return;
         }
 
