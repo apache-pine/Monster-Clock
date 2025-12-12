@@ -1,0 +1,717 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Aquarium Countdown</title>
+  <style>
+    html, body { height: 100%; margin: 0; }
+    body {
+      background: #04121f;
+      display: grid;
+      place-items: center;
+      overflow: hidden;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+    }
+    #wrap {
+      width: min(1100px, 96vw);
+      height: min(700px, 88vh);
+      position: relative;
+      border-radius: 18px;
+      overflow: hidden;
+      box-shadow: 0 18px 60px rgba(0,0,0,.45);
+      background:
+        radial-gradient(1200px 700px at 50% 30%, rgba(44, 155, 210, .25), transparent 60%),
+        linear-gradient(180deg, #06233a 0%, #04121f 60%, #020a12 100%);
+    }
+    canvas { display: block; width: 100%; height: 100%; }
+
+    /* Invisible hover zone (bottom-left) that reveals the fish count */
+    #count-hover-zone{
+    position: absolute;
+    left: 0;
+    bottom: 0;
+    width: 50px;
+    height: 20px;
+    background: transparent;
+    }
+
+    #count-hover-zone span{
+    position: absolute;
+    left: 14px;
+    bottom: 10px;
+    color: rgba(255,255,255,.7);
+    font-size: 12px;
+    user-select: none;
+    text-shadow: 0 1px 2px rgba(0,0,0,.6);
+    opacity: 0;
+    transition: opacity 120ms ease;
+    pointer-events: none; /* so only the zone triggers hover */
+    }
+
+    #count-hover-zone:hover span{
+    opacity: 1;
+    }
+
+    /* Settings gear */
+    .settings-button {
+      position: absolute;
+      top: 12px;
+      right: 12px;
+      border-radius: 999px;
+      border: 1px solid rgba(255,255,255,.25);
+      background: rgba(2,6,23,.75);
+      color: rgba(255,255,255,.9);
+      width: 2rem;
+      height: 2rem;
+      font-size: 1rem;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      backdrop-filter: blur(6px);
+    }
+    .settings-button:hover {
+      background: rgba(17,24,39,.85);
+    }
+
+    .settings-panel {
+      position: absolute;
+      top: 52px;
+      right: 12px;
+      background: rgba(2,6,23,.92);
+      border: 1px solid rgba(255,255,255,.22);
+      border-radius: 0.5rem;
+      padding: 0.75rem 0.9rem;
+      font-size: 0.85rem;
+      color: rgba(255,255,255,.9);
+      min-width: 210px;
+      z-index: 50;
+      backdrop-filter: blur(8px);
+    }
+    .settings-panel.hidden { display: none; }
+
+    .settings-header {
+      font-weight: 600;
+      margin-bottom: 0.5rem;
+      font-size: 0.9rem;
+    }
+
+    .settings-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.5rem;
+      margin-bottom: 0.6rem;
+    }
+
+    .settings-row label { flex: 1; }
+
+    .settings-row input[type="time"] {
+      flex: 1;
+      background: rgba(2,6,23,.6);
+      border: 1px solid rgba(255,255,255,.22);
+      border-radius: 0.375rem;
+      color: rgba(255,255,255,.9);
+      padding: 0.15rem 0.3rem;
+      font-size: 0.85rem;
+    }
+
+    .settings-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 0.4rem;
+      margin-top: 0.2rem;
+    }
+
+    .settings-actions button {
+      padding: 0.25rem 0.6rem;
+      border-radius: 0.375rem;
+      border: 1px solid rgba(255,255,255,.22);
+      background: rgba(17,24,39,.85);
+      color: rgba(255,255,255,.9);
+      font-size: 0.82rem;
+      cursor: pointer;
+    }
+    .settings-actions button:hover {
+      background: rgba(31,41,55,.95);
+    }
+  </style>
+</head>
+<body>
+  <div id="wrap">
+    <canvas id="c"></canvas>
+
+    <button id="settings-btn" class="settings-button" type="button" aria-label="Settings">⚙</button>
+
+    <div id="settings-panel" class="settings-panel hidden">
+      <div class="settings-header">Aquarium Settings</div>
+      <div class="settings-row">
+        <label for="home-time">H</label>
+        <input id="home-time" type="time">
+      </div>
+      <div class="settings-actions">
+        <button id="settings-save" type="button">Save</button>
+        <button id="settings-cancel" type="button">Cancel</button>
+      </div>
+    </div>
+
+    <div id="count-hover-zone"><span id="fish-left">0</span></div>
+  </div>
+
+<script>
+(() => {
+  // =============================
+  // Countdown Settings (Pacific)
+  // =============================
+  const SETTINGS_KEY = "aquariumEndTimeSettings";
+  const DEFAULT_HOME_MINUTES = 17 * 60; // 17:00
+
+  function getPacificComponents() {
+    const now = new Date();
+    const formatter = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/Los_Angeles",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false
+    });
+    const parts = formatter.formatToParts(now);
+    const get = type => parts.find(p => p.type === type).value;
+    return {
+      year: Number(get("year")),
+      month: Number(get("month")),
+      day: Number(get("day")),
+      hour: Number(get("hour")),
+      minute: Number(get("minute"))
+    };
+  }
+
+  function getPacificDateKey(pac) {
+    const m = pac.month.toString().padStart(2, "0");
+    const d = pac.day.toString().padStart(2, "0");
+    return pac.year + "-" + m + "-" + d;
+  }
+
+  function timeStringToMinutes(str) {
+    if (!str) return null;
+    const [hStr, mStr] = str.split(":");
+    const h = Number(hStr);
+    const m = Number(mStr);
+    if (!Number.isFinite(h) || !Number.isFinite(m)) return null;
+    const total = h * 60 + m;
+    if (total < 0 || total >= 24 * 60) return null;
+    return total;
+  }
+
+  function minutesToTimeString(minutes) {
+    let m = minutes % (24 * 60);
+    if (m < 0) m += 24 * 60;
+    const h = Math.floor(m / 60);
+    const min = m % 60;
+    return h.toString().padStart(2, "0") + ":" + min.toString().padStart(2, "0");
+  }
+
+  function getSettingsForToday(pac) {
+    const todayKey = getPacificDateKey(pac);
+    try {
+      const raw = localStorage.getItem(SETTINGS_KEY);
+      if (!raw) return { date: todayKey, homeMinutes: DEFAULT_HOME_MINUTES };
+
+      const parsed = JSON.parse(raw);
+      if (!parsed || parsed.date !== todayKey) {
+        return { date: todayKey, homeMinutes: DEFAULT_HOME_MINUTES };
+      }
+      return {
+        date: parsed.date,
+        homeMinutes: Number.isFinite(parsed.homeMinutes) ? parsed.homeMinutes : DEFAULT_HOME_MINUTES
+      };
+    } catch {
+      return { date: todayKey, homeMinutes: DEFAULT_HOME_MINUTES };
+    }
+  }
+
+  function saveSettingsForToday(pac, homeMinutes) {
+    const todayKey = getPacificDateKey(pac);
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify({ date: todayKey, homeMinutes }));
+  }
+
+  function minutesLeftUntilHome() {
+    const pac = getPacificComponents();
+    const nowMinutes = pac.hour * 60 + pac.minute;
+    const settings = getSettingsForToday(pac);
+    return {
+      pac,
+      homeMinutes: settings.homeMinutes,
+      left: settings.homeMinutes - nowMinutes
+    };
+  }
+
+  // =============================
+  // Config (Aquarium)
+  // =============================
+  const TARGET_FPS = 24;
+  const DT = 1 / TARGET_FPS;
+
+  // Fish count is driven by countdown now.
+  let FISH_COUNT = 0;
+
+  // Sprite sheet settings
+  const SPRITE_URL = "fish.png";
+  const SHEET_COLS = 4;
+  const SHEET_ROWS = 2;
+  const FRAMES_TOTAL = SHEET_COLS * SHEET_ROWS;
+  const ANIM_FPS = 8;
+
+  // Behavior tuning
+  const MAX_SPEED_MIN = 30;
+  const MAX_SPEED_MAX = 85;
+  const TURN_RATE_MIN = 0.8;
+  const TURN_RATE_MAX = 2.2;
+
+  const FLIP_EPS = 12;
+
+  const WANDER_STRENGTH = 20;
+  const WANDER_JITTER = 50;
+  const WALL_AVOID_DIST = 200;
+  const WALL_AVOID_FORCE = 2.0;
+
+  // Separation (light)
+  const SEP_RADIUS = 24;
+  const SEP_FORCE = 0.55;
+
+  // Pauses
+  const PAUSE_CHANCE_PER_SEC = 0.06;
+  const PAUSE_MIN = 0.15;
+  const PAUSE_MAX = 0.55;
+  const PAUSE_SLOWDOWN = 0.20;
+
+  // Depth
+  const SCALE_MIN = 0.35;
+  const SCALE_MAX = 0.95;
+
+  // Spatial grid for separation
+  const CELL_SIZE = Math.max(SEP_RADIUS * 2, 40);
+
+  // Hard cap so you don't accidentally render 800+ if your end time is far away
+  const MAX_FISH_CAP = 600;
+
+  // =============================
+  // Canvas setup
+  // =============================
+  const wrap = document.getElementById("wrap");
+  const canvas = document.getElementById("c");
+  const ctx = canvas.getContext("2d", { alpha: true });
+
+  function resizeCanvas() {
+    const r = wrap.getBoundingClientRect();
+    const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+    canvas.width = Math.floor(r.width * dpr);
+    canvas.height = Math.floor(r.height * dpr);
+    canvas._dpr = dpr;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  window.addEventListener("resize", resizeCanvas, { passive: true });
+  resizeCanvas();
+
+  const W = () => canvas.width / canvas._dpr;
+  const H = () => canvas.height / canvas._dpr;
+
+  // =============================
+  // Sprite loading
+  // =============================
+  const sprite = new Image();
+  sprite.src = SPRITE_URL;
+
+  let frameW = 0, frameH = 0;
+  let useFallback = false;
+
+  sprite.onload = () => {
+    frameW = Math.floor(sprite.width / SHEET_COLS);
+    frameH = Math.floor(sprite.height / SHEET_ROWS);
+    initCountdownFish();
+    requestAnimationFrame(loop);
+    tickMinuteAligned();
+  };
+
+  sprite.onerror = () => {
+    console.warn("fish.png failed to load. Using fallback circles.");
+    frameW = 48; frameH = 24;
+    useFallback = true;
+    initCountdownFish();
+    requestAnimationFrame(loop);
+    tickMinuteAligned();
+  };
+
+  // =============================
+  // Fish model
+  // =============================
+  let fish = [];
+
+  function rand(min, max) { return min + Math.random() * (max - min); }
+  function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+
+  function makeFish() {
+    const s = rand(SCALE_MIN, SCALE_MAX);
+    const speed = rand(MAX_SPEED_MIN, MAX_SPEED_MAX) * (0.7 + s * 0.6);
+
+    const a = rand(-Math.PI, Math.PI);
+    const vx = Math.cos(a) * speed;
+    const vy = Math.sin(a) * speed;
+
+    return {
+      x: rand(10, W() - 10),
+      y: rand(10, H() - 10),
+      vx, vy,
+      maxSpeed: speed,
+      turnRate: rand(TURN_RATE_MIN, TURN_RATE_MAX),
+
+      wanderAngle: rand(-Math.PI, Math.PI),
+      pauseT: 0,
+
+      frame: Math.floor(Math.random() * FRAMES_TOTAL),
+      frameT: Math.random() * (1 / ANIM_FPS),
+
+      scale: s,
+      facing: 1
+    };
+  }
+
+  function setFishCount(target) {
+    // target can be 0..MAX_FISH_CAP
+    const t = clamp(Math.floor(target), 0, MAX_FISH_CAP);
+
+    if (t === fish.length) return;
+
+    if (t < fish.length) {
+      // remove fish from end
+      fish.length = t;
+      return;
+    }
+
+    // add fish
+    const toAdd = t - fish.length;
+    for (let i = 0; i < toAdd; i++) fish.push(makeFish());
+  }
+
+  function initCountdownFish() {
+    const { left, homeMinutes } = minutesLeftUntilHome();
+    const minutesLeft = clamp(left, 0, MAX_FISH_CAP);
+    setFishCount(minutesLeft);
+
+    const homeStr = minutesToTimeString(homeMinutes);
+    document.getElementById("fish-left").textContent = String(minutesLeft);
+  }
+
+  // =============================
+  // Spatial hashing
+  // =============================
+  let grid = new Map();
+  function gridKey(cx, cy) { return cx + "," + cy; }
+  function gridClear() { grid.clear(); }
+
+  function gridInsert(i, fx, fy) {
+    const cx = Math.floor(fx / CELL_SIZE);
+    const cy = Math.floor(fy / CELL_SIZE);
+    const k = gridKey(cx, cy);
+    let arr = grid.get(k);
+    if (!arr) { arr = []; grid.set(k, arr); }
+    arr.push(i);
+  }
+
+  function gridNeighbors(fx, fy) {
+    const cx = Math.floor(fx / CELL_SIZE);
+    const cy = Math.floor(fy / CELL_SIZE);
+    const out = [];
+    for (let y = cy - 1; y <= cy + 1; y++) {
+      for (let x = cx - 1; x <= cx + 1; x++) {
+        const arr = grid.get(gridKey(x, y));
+        if (arr) out.push(arr);
+      }
+    }
+    return out;
+  }
+
+  // =============================
+  // Steering helpers
+  // =============================
+  function steerTowardVelocity(f, desiredVx, desiredVy, dt) {
+    const curA = Math.atan2(f.vy, f.vx);
+    const desA = Math.atan2(desiredVy, desiredVx);
+
+    let da = desA - curA;
+    while (da > Math.PI) da -= 2 * Math.PI;
+    while (da < -Math.PI) da += 2 * Math.PI;
+
+    const maxTurn = f.turnRate * dt;
+    da = clamp(da, -maxTurn, maxTurn);
+    const newA = curA + da;
+
+    const sp = Math.hypot(f.vx, f.vy);
+    f.vx = Math.cos(newA) * sp;
+    f.vy = Math.sin(newA) * sp;
+  }
+
+  function limitSpeed(f, targetMax) {
+    const sp = Math.hypot(f.vx, f.vy);
+    if (sp < 0.0001) {
+      const a = rand(-Math.PI, Math.PI);
+      f.vx = Math.cos(a) * targetMax * 0.3;
+      f.vy = Math.sin(a) * targetMax * 0.3;
+      return;
+    }
+    if (sp > targetMax) {
+      const m = targetMax / sp;
+      f.vx *= m;
+      f.vy *= m;
+    }
+  }
+
+  // =============================
+  // Update + Draw
+  // =============================
+  function update(dt) {
+    const w = W(), h = H();
+
+    gridClear();
+    for (let i = 0; i < fish.length; i++) gridInsert(i, fish[i].x, fish[i].y);
+
+    for (let i = 0; i < fish.length; i++) {
+      const f = fish[i];
+
+      if (f.pauseT <= 0 && Math.random() < PAUSE_CHANCE_PER_SEC * dt) {
+        f.pauseT = rand(PAUSE_MIN, PAUSE_MAX);
+      }
+
+      f.wanderAngle += rand(-1, 1) * WANDER_JITTER * dt;
+
+      const curA = Math.atan2(f.vy, f.vx);
+      const desA = curA + Math.sin(f.wanderAngle) * WANDER_STRENGTH * 0.35;
+
+      let desiredVx = Math.cos(desA);
+      let desiredVy = Math.sin(desA);
+
+      // Wall avoidance
+      let ax = 0, ay = 0;
+      if (f.x < WALL_AVOID_DIST) ax += (WALL_AVOID_DIST - f.x) / WALL_AVOID_DIST;
+      if (f.x > w - WALL_AVOID_DIST) ax -= (f.x - (w - WALL_AVOID_DIST)) / WALL_AVOID_DIST;
+      if (f.y < WALL_AVOID_DIST) ay += (WALL_AVOID_DIST - f.y) / WALL_AVOID_DIST;
+      if (f.y > h - WALL_AVOID_DIST) ay -= (f.y - (h - WALL_AVOID_DIST)) / WALL_AVOID_DIST;
+
+      if (ax || ay) {
+        desiredVx += ax * WALL_AVOID_FORCE;
+        desiredVy += ay * WALL_AVOID_FORCE;
+      }
+
+      // Separation
+      let sx = 0, sy = 0;
+      const neighCells = gridNeighbors(f.x, f.y);
+      const r2 = SEP_RADIUS * SEP_RADIUS;
+
+      for (const cellArr of neighCells) {
+        for (const j of cellArr) {
+          if (j === i) continue;
+          const o = fish[j];
+          const dx = f.x - o.x;
+          const dy = f.y - o.y;
+          const d2 = dx*dx + dy*dy;
+          if (d2 > 0 && d2 < r2) {
+            const d = Math.sqrt(d2);
+            const push = (SEP_RADIUS - d) / SEP_RADIUS;
+            sx += (dx / d) * push;
+            sy += (dy / d) * push;
+          }
+        }
+      }
+
+      if (sx || sy) {
+        desiredVx += sx * SEP_FORCE;
+        desiredVy += sy * SEP_FORCE;
+      }
+
+      // Normalize desired
+      const mag = Math.hypot(desiredVx, desiredVy) || 1;
+      desiredVx /= mag;
+      desiredVy /= mag;
+
+      // Target speed
+      let targetSpeed = f.maxSpeed;
+      if (f.pauseT > 0) {
+        f.pauseT -= dt;
+        targetSpeed *= PAUSE_SLOWDOWN;
+      }
+
+      steerTowardVelocity(f, desiredVx, desiredVy, dt);
+
+      const curSp = Math.hypot(f.vx, f.vy) || 0.0001;
+      const sp = curSp + (targetSpeed - curSp) * clamp(4.0 * dt, 0, 1);
+      const a = Math.atan2(f.vy, f.vx);
+      f.vx = Math.cos(a) * sp;
+      f.vy = Math.sin(a) * sp;
+
+      limitSpeed(f, f.maxSpeed);
+
+      f.x += f.vx * dt;
+      f.y += f.vy * dt;
+
+      if (f.x < 0) { f.x = 0; f.vx = Math.abs(f.vx); }
+      if (f.x > w) { f.x = w; f.vx = -Math.abs(f.vx); }
+      if (f.y < 0) { f.y = 0; f.vy = Math.abs(f.vy); }
+      if (f.y > h) { f.y = h; f.vy = -Math.abs(f.vy); }
+
+      // Animate frame
+      f.frameT += dt;
+      const frameStep = 1 / ANIM_FPS;
+      while (f.frameT >= frameStep) {
+        f.frameT -= frameStep;
+        f.frame = (f.frame + 1) % FRAMES_TOTAL;
+      }
+    }
+  }
+
+  function draw() {
+    const w = W(), h = H();
+    ctx.clearRect(0, 0, w, h);
+
+    const idx = fish.map((_, i) => i);
+    idx.sort((a, b) => fish[a].scale - fish[b].scale);
+
+    for (const i of idx) {
+      const f = fish[i];
+
+      const drawW = frameW * f.scale;
+      const drawH = frameH * f.scale;
+
+      const fx = f.frame % SHEET_COLS;
+      const fy = Math.floor(f.frame / SHEET_COLS);
+      const sx = fx * frameW;
+      const sy = fy * frameH;
+
+      ctx.save();
+      ctx.translate(f.x, f.y);
+
+      // Facing hysteresis
+      if (f.vx >  FLIP_EPS) f.facing = 1;
+      if (f.vx < -FLIP_EPS) f.facing = -1;
+
+      ctx.scale(f.facing, 1);
+
+      // Tilt in sprite space
+      const tiltAngle = Math.atan2(f.vy, f.vx * f.facing);
+      const tilt = clamp(tiltAngle, -0.55, 0.55);
+      ctx.rotate(tilt);
+
+      if (useFallback) {
+        ctx.globalAlpha = 0.75;
+        ctx.beginPath();
+        ctx.ellipse(0, 0, drawW * 0.45, drawH * 0.35, 0, 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(255,255,255,0.75)";
+        ctx.fill();
+      } else {
+        ctx.drawImage(sprite, sx, sy, frameW, frameH, -drawW/2, -drawH/2, drawW, drawH);
+      }
+
+      ctx.restore();
+    }
+
+    // vignette
+    const g = ctx.createRadialGradient(w/2, h/2, Math.min(w,h)*0.2, w/2, h/2, Math.max(w,h)*0.75);
+    g.addColorStop(0, "rgba(0,0,0,0)");
+    g.addColorStop(1, "rgba(0,0,0,0.28)");
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, w, h);
+  }
+
+  // =============================
+  // Fixed timestep loop @ 24 fps
+  // =============================
+  let last = 0;
+  let acc = 0;
+
+  function loop(t) {
+    const now = t / 1000;
+    if (!last) last = now;
+
+    let delta = now - last;
+    last = now;
+    delta = Math.min(delta, 0.25);
+
+    acc += delta;
+    while (acc >= DT) {
+      update(DT);
+      acc -= DT;
+    }
+
+    draw();
+    requestAnimationFrame(loop);
+  }
+
+  // =============================
+  // Minute-aligned countdown tick
+  // =============================
+  function updateCountdownAndFish() {
+    const { left, homeMinutes } = minutesLeftUntilHome();
+    const minutesLeft = clamp(left, 0, MAX_FISH_CAP);
+
+    setFishCount(minutesLeft);
+
+    const homeStr = minutesToTimeString(homeMinutes);
+    document.getElementById("fish-left").textContent = String(minutesLeft);
+  }
+
+  function tickMinuteAligned() {
+    updateCountdownAndFish();
+
+    const now = new Date();
+    const msToNextMinute = (60 - now.getSeconds()) * 1000 - now.getMilliseconds();
+    const delay = msToNextMinute <= 0 ? 1000 : msToNextMinute;
+    setTimeout(tickMinuteAligned, delay);
+  }
+
+  // =============================
+  // Settings UI wiring
+  // =============================
+  const settingsBtn = document.getElementById("settings-btn");
+  const settingsPanel = document.getElementById("settings-panel");
+  const homeTimeInput = document.getElementById("home-time");
+  const settingsSaveBtn = document.getElementById("settings-save");
+  const settingsCancelBtn = document.getElementById("settings-cancel");
+
+  function openSettingsPanel() {
+    const pac = getPacificComponents();
+    const s = getSettingsForToday(pac);
+    homeTimeInput.value = minutesToTimeString(s.homeMinutes);
+    settingsPanel.classList.remove("hidden");
+  }
+
+  function closeSettingsPanel() {
+    settingsPanel.classList.add("hidden");
+  }
+
+  function saveSettingsFromPanel() {
+    const homeStr = homeTimeInput.value;
+    const homeMinutes = timeStringToMinutes(homeStr);
+    if (homeMinutes === null) {
+      alert("Please enter a valid end time (H).");
+      return;
+    }
+    const pac = getPacificComponents();
+    saveSettingsForToday(pac, homeMinutes);
+    closeSettingsPanel();
+    updateCountdownAndFish();
+  }
+
+  settingsBtn.addEventListener("click", () => {
+    if (settingsPanel.classList.contains("hidden")) openSettingsPanel();
+    else closeSettingsPanel();
+  });
+
+  settingsSaveBtn.addEventListener("click", saveSettingsFromPanel);
+  settingsCancelBtn.addEventListener("click", closeSettingsPanel);
+
+})();
+</script>
+</body>
+</html>
