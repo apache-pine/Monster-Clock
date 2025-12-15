@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Aquarium Countdown</title>
   <style>
+    /* Full-screen host; grid centers the aquarium in the viewport. */
     html, body { height: 100%; margin: 0; }
     body {
       background: #04121f;
@@ -13,6 +14,8 @@
       overflow: hidden;
       font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
     }
+
+    /* Main aquarium frame with rounded corners, gradient water, and drop shadow. */
     #wrap {
       width: min(1100px, 96vw);
       height: min(700px, 88vh);
@@ -26,7 +29,7 @@
     }
     canvas { display: block; width: 100%; height: 100%; }
 
-    /* Invisible hover zone (bottom-left) that reveals the fish count */
+    /* Hover-only readout for the number of fish (minutes remaining). */
     #count-hover-zone{
     position: absolute;
     left: 0;
@@ -46,14 +49,14 @@
     text-shadow: 0 1px 2px rgba(0,0,0,.6);
     opacity: 0;
     transition: opacity 120ms ease;
-    pointer-events: none; /* so only the zone triggers hover */
+    pointer-events: none; /* only the zone handles hover */
     }
 
     #count-hover-zone:hover span{
     opacity: 1;
     }
 
-    /* Settings gear */
+    /* Settings gear button pinned to the top-right of the aquarium. */
     .settings-button {
       position: absolute;
       top: 12px;
@@ -75,6 +78,7 @@
       background: rgba(17,24,39,.85);
     }
 
+    /* Floating settings panel for editing the home (end) time. */
     .settings-panel {
       position: absolute;
       top: 52px;
@@ -117,6 +121,16 @@
       font-size: 0.85rem;
     }
 
+    .settings-row select {
+      flex: 1;
+      background: rgba(2,6,23,.6);
+      border: 1px solid rgba(255,255,255,.22);
+      border-radius: 0.375rem;
+      color: rgba(255,255,255,.9);
+      padding: 0.15rem 0.3rem;
+      font-size: 0.85rem;
+    }
+
     .settings-actions {
       display: flex;
       justify-content: flex-end;
@@ -136,16 +150,51 @@
     .settings-actions button:hover {
       background: rgba(31,41,55,.95);
     }
+
+    .settings-row input[type="range"] {
+      flex: 1;
+    }
+
+    .settings-row button {
+      flex: 1;
+      padding: 0.25rem 0.6rem;
+      border-radius: 0.375rem;
+      border: 1px solid rgba(255,255,255,.22);
+      background: rgba(17,24,39,.85);
+      color: rgba(255,255,255,.9);
+      font-size: 0.82rem;
+      cursor: pointer;
+    }
+    .settings-row button:hover {
+      background: rgba(31,41,55,.95);
+    }
   </style>
 </head>
 <body>
+  <!--
+    Layout:
+    - #wrap: visual aquarium container.
+    - canvas: where fish are drawn.
+    - settings gear/panel: edit home time.
+    - count-hover-zone: hidden text showing minutes (fish count) on hover.
+  -->
   <div id="wrap">
+    <audio id="bg-audio" src="water-ambience.mp3" loop preload="auto"></audio>
+    <audio id="sfx-poof" src="poof.mp3" preload="auto"></audio>
     <canvas id="c"></canvas>
 
     <button id="settings-btn" class="settings-button" type="button" aria-label="Settings">⚙</button>
 
     <div id="settings-panel" class="settings-panel hidden">
       <div class="settings-header">Aquarium Settings</div>
+      <div class="settings-row">
+        <label for="home-day">Day</label>
+        <select id="home-day">
+          <option value="today">Today</option>
+          <option value="tomorrow">Tomorrow</option>
+        </select>
+      </div>
+
       <div class="settings-row">
         <label for="home-time">H</label>
         <input id="home-time" type="time">
@@ -154,6 +203,25 @@
         <button id="settings-save" type="button">Save</button>
         <button id="settings-cancel" type="button">Cancel</button>
       </div>
+      <div class="settings-header">Sound</div>
+
+      <div class="settings-row">
+        <label for="bg-mute">Background</label>
+        <button id="bg-mute" type="button">Mute</button>
+      </div>
+      <div class="settings-row">
+        <label for="bg-vol">BG Vol</label>
+        <input id="bg-vol" type="range" min="0" max="100" value="20">
+      </div>
+
+      <div class="settings-row">
+        <label for="sfx-mute">SFX</label>
+        <button id="sfx-mute" type="button">Mute</button>
+      </div>
+      <div class="settings-row">
+        <label for="sfx-vol">SFX Vol</label>
+        <input id="sfx-vol" type="range" min="0" max="100" value="60">
+      </div>
     </div>
 
     <div id="count-hover-zone"><span id="fish-left">0</span></div>
@@ -161,14 +229,30 @@
 
 <script>
 (() => {
+  /*
+    High-level flow:
+    - Keep a Pacific-time countdown to "home" (H) stored target day in localStorage.
+    - Map minutes remaining to fish count (capped) and render animated fish with boids-like motion.
+    - Run a 24 fps physics loop for smooth motion, and a separate minute-aligned timer for countdown updates.
+    - UI lets user change H via a small gear-backed settings panel.
+  */
+
   // =============================
   // Countdown Settings (Pacific)
   // =============================
   const SETTINGS_KEY = "aquariumEndTimeSettings";
-  const DEFAULT_HOME_MINUTES = 17 * 60; // 17:00
+  const DEFAULT_HOME_MINUTES = 17 * 60; // 17:00 default end time
+  const AUDIO_KEY = "aquariumAudioSettings";
+  const DEFAULT_AUDIO = {
+    bgVol: 0.20,
+    bgMuted: false,
+    sfxVol: 0.60,
+    sfxMuted: false
+  };
 
   function getPacificComponents() {
     const now = new Date();
+    // Use Intl to obtain Pacific components independent of user machine timezone.
     const formatter = new Intl.DateTimeFormat("en-US", {
       timeZone: "America/Los_Angeles",
       year: "numeric",
@@ -192,11 +276,13 @@
   function getPacificDateKey(pac) {
     const m = pac.month.toString().padStart(2, "0");
     const d = pac.day.toString().padStart(2, "0");
+    // YYYY-MM-DD key keeps per-day settings isolated and auto-resets at midnight.
     return pac.year + "-" + m + "-" + d;
   }
 
   function timeStringToMinutes(str) {
     if (!str) return null;
+    // Parse HH:MM into minutes since midnight; reject invalid numbers or ranges.
     const [hStr, mStr] = str.split(":");
     const h = Number(hStr);
     const m = Number(mStr);
@@ -207,6 +293,7 @@
   }
 
   function minutesToTimeString(minutes) {
+    // Normalize to 0..1439 then format back to HH:MM for inputs and tooltips.
     let m = minutes % (24 * 60);
     if (m < 0) m += 24 * 60;
     const h = Math.floor(m / 60);
@@ -214,39 +301,70 @@
     return h.toString().padStart(2, "0") + ":" + min.toString().padStart(2, "0");
   }
 
-  function getSettingsForToday(pac) {
+  function getTargetSettings(pac) {
     const todayKey = getPacificDateKey(pac);
     try {
       const raw = localStorage.getItem(SETTINGS_KEY);
-      if (!raw) return { date: todayKey, homeMinutes: DEFAULT_HOME_MINUTES };
-
-      const parsed = JSON.parse(raw);
-      if (!parsed || parsed.date !== todayKey) {
-        return { date: todayKey, homeMinutes: DEFAULT_HOME_MINUTES };
+      if (!raw) {
+        return { targetDate: todayKey, homeMinutes: DEFAULT_HOME_MINUTES };
       }
-      return {
-        date: parsed.date,
-        homeMinutes: Number.isFinite(parsed.homeMinutes) ? parsed.homeMinutes : DEFAULT_HOME_MINUTES
-      };
+      const parsed = JSON.parse(raw);
+      if (!parsed) return { targetDate: todayKey, homeMinutes: DEFAULT_HOME_MINUTES };
+
+      const targetDate = typeof parsed.targetDate === "string" ? parsed.targetDate : todayKey;
+      const homeMinutes = Number.isFinite(parsed.homeMinutes) ? parsed.homeMinutes : DEFAULT_HOME_MINUTES;
+
+      // If the stored target date is in the past, keep it (so it stays at 0) until user changes it.
+      return { targetDate, homeMinutes };
     } catch {
-      return { date: todayKey, homeMinutes: DEFAULT_HOME_MINUTES };
+      return { targetDate: todayKey, homeMinutes: DEFAULT_HOME_MINUTES };
     }
   }
 
-  function saveSettingsForToday(pac, homeMinutes) {
-    const todayKey = getPacificDateKey(pac);
-    localStorage.setItem(SETTINGS_KEY, JSON.stringify({ date: todayKey, homeMinutes }));
+  function saveTargetSettings(targetDate, homeMinutes) {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify({ targetDate, homeMinutes }));
   }
 
   function minutesLeftUntilHome() {
     const pac = getPacificComponents();
     const nowMinutes = pac.hour * 60 + pac.minute;
-    const settings = getSettingsForToday(pac);
-    return {
-      pac,
-      homeMinutes: settings.homeMinutes,
-      left: settings.homeMinutes - nowMinutes
-    };
+    const todayKey = getPacificDateKey(pac);
+
+    const s = getTargetSettings(pac);
+    const targetKey = s.targetDate;
+
+    if (targetKey === todayKey) {
+      return { pac, homeMinutes: s.homeMinutes, left: s.homeMinutes - nowMinutes };
+    }
+
+    // Target is tomorrow (or a future date, but we only expose tomorrow in UI)
+    if (targetKey > todayKey) {
+      const leftToday = (24 * 60) - nowMinutes;
+      return { pac, homeMinutes: s.homeMinutes, left: leftToday + s.homeMinutes };
+    }
+
+    // Target date is in the past -> expired
+    return { pac, homeMinutes: s.homeMinutes, left: -1 };
+  }
+
+  function loadAudioSettings() {
+    try {
+      const raw = localStorage.getItem(AUDIO_KEY);
+      if (!raw) return { ...DEFAULT_AUDIO };
+      const p = JSON.parse(raw) || {};
+      return {
+        bgVol: Number.isFinite(p.bgVol) ? clamp(p.bgVol, 0, 1) : DEFAULT_AUDIO.bgVol,
+        bgMuted: !!p.bgMuted,
+        sfxVol: Number.isFinite(p.sfxVol) ? clamp(p.sfxVol, 0, 1) : DEFAULT_AUDIO.sfxVol,
+        sfxMuted: !!p.sfxMuted
+      };
+    } catch {
+      return { ...DEFAULT_AUDIO };
+    }
+  }
+
+  function saveAudioSettings(s) {
+    localStorage.setItem(AUDIO_KEY, JSON.stringify(s));
   }
 
   // =============================
@@ -255,7 +373,7 @@
   const TARGET_FPS = 24;
   const DT = 1 / TARGET_FPS;
 
-  // Fish count is driven by countdown now.
+  // Fish count is driven by countdown now (minutes remaining).
   let FISH_COUNT = 0;
 
   // Sprite sheet settings
@@ -295,8 +413,44 @@
   // Spatial grid for separation
   const CELL_SIZE = Math.max(SEP_RADIUS * 2, 40);
 
-  // Hard cap so you don't accidentally render 800+ if your end time is far away
-  const MAX_FISH_CAP = 600;
+  // Hard cap so you don't accidentally render 1000+ if your end time is far away
+  const MAX_FISH_CAP = 800;
+
+  // =============================
+  // Despawn effects (puff + bubbles)
+  // =============================
+  const PUFF_LIFE = 0.28;          // seconds
+  const PUFF_PIECES = 10;          // how many little blobs in the puff
+  const PUFF_START_R = 2.5;        // starting blob radius (px)
+  const PUFF_END_R = 10;           // ending blob radius (px)
+
+  const BUBBLE_COUNT_MIN = 10;
+  const BUBBLE_COUNT_MAX = 16;
+  const BUBBLE_LIFE_MIN = 1.4;     // seconds
+  const BUBBLE_LIFE_MAX = 2.6;
+  const BUBBLE_R_MIN = 1.5;        // px
+  const BUBBLE_R_MAX = 3.5;
+  const BUBBLE_RISE_MIN = 20;      // px/s upward
+  const BUBBLE_RISE_MAX = 55;
+  const BUBBLE_DRIFT = 18;         // px/s sideways drift amplitude
+
+  let puffs = [];    // each puff is an object with many "pieces"
+  let bubbles = [];  // each bubble is one particle
+
+  // =============================
+  // Ambient background bubbles
+  // =============================
+  const AMBIENT_LANES = 12;            // number of columns/streams
+  const AMBIENT_PER_LANE = 6;          // bubbles per lane on screen
+  const AMBIENT_X_JITTER = 10;         // px side jitter around lane center
+  const AMBIENT_R_MIN = 1.2;
+  const AMBIENT_R_MAX = 3.2;
+  const AMBIENT_RISE_MIN = 12;         // px/s
+  const AMBIENT_RISE_MAX = 35;         // px/s
+  const AMBIENT_ALPHA = 0.18;          // overall faintness
+  const AMBIENT_WOBBLE = 10;           // px/s wobble strength
+
+  let ambientBubbles = [];
 
   // =============================
   // Canvas setup
@@ -307,6 +461,7 @@
 
   function resizeCanvas() {
     const r = wrap.getBoundingClientRect();
+    // Respect devicePixelRatio for crisp sprites while capping at 2x to avoid overdraw cost.
     const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
     canvas.width = Math.floor(r.width * dpr);
     canvas.height = Math.floor(r.height * dpr);
@@ -318,6 +473,9 @@
 
   const W = () => canvas.width / canvas._dpr;
   const H = () => canvas.height / canvas._dpr;
+
+  initAmbientBubbles();
+  window.addEventListener("resize", () => initAmbientBubbles(), { passive: true });
 
   // =============================
   // Sprite loading
@@ -331,6 +489,7 @@
   sprite.onload = () => {
     frameW = Math.floor(sprite.width / SHEET_COLS);
     frameH = Math.floor(sprite.height / SHEET_ROWS);
+    // Only start simulation once assets are ready so sizing is correct.
     initCountdownFish();
     requestAnimationFrame(loop);
     tickMinuteAligned();
@@ -340,6 +499,7 @@
     console.warn("fish.png failed to load. Using fallback circles.");
     frameW = 48; frameH = 24;
     useFallback = true;
+    // Start anyway with simple circles so the countdown still works without the sprite.
     initCountdownFish();
     requestAnimationFrame(loop);
     tickMinuteAligned();
@@ -352,6 +512,125 @@
 
   function rand(min, max) { return min + Math.random() * (max - min); }
   function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+
+  function lerp(a, b, t) { return a + (b - a) * t; }
+
+  // Spawn a puff + bubbles at a point
+  function spawnDespawnEffect(x, y, scale = 1) {
+    // Puff is made of small circles that expand and fade quickly.
+    const pieces = [];
+    for (let k = 0; k < PUFF_PIECES; k++) {
+      const a = rand(-Math.PI, Math.PI);
+      const sp = rand(12, 40) * (0.7 + scale * 0.7); // outward speed
+      pieces.push({
+        x, y,
+        vx: Math.cos(a) * sp,
+        vy: Math.sin(a) * sp,
+        seed: Math.random() * 10
+      });
+    }
+    puffs.push({
+      t: 0,
+      life: PUFF_LIFE,
+      pieces,
+      scale
+    });
+
+    // Bubbles are individual particles that rise up and drift.
+    const n = Math.floor(rand(BUBBLE_COUNT_MIN, BUBBLE_COUNT_MAX + 1));
+    for (let k = 0; k < n; k++) {
+      bubbles.push({
+        x: x + rand(-6, 6) * scale,
+        y: y + rand(-4, 4) * scale,
+        vx: rand(-BUBBLE_DRIFT, BUBBLE_DRIFT) * 0.35,
+        vy: -rand(BUBBLE_RISE_MIN, BUBBLE_RISE_MAX) * (0.7 + scale * 0.7),
+        r: rand(BUBBLE_R_MIN, BUBBLE_R_MAX) * (0.7 + scale * 0.7),
+        t: 0,
+        life: rand(BUBBLE_LIFE_MIN, BUBBLE_LIFE_MAX)
+      });
+    }
+  }
+
+  function updateEffects(dt) {
+    // Update puffs
+    for (let i = puffs.length - 1; i >= 0; i--) {
+      const p = puffs[i];
+      p.t += dt;
+      const alive = p.t < p.life;
+
+      // Integrate puff pieces
+      for (const pc of p.pieces) {
+        pc.x += pc.vx * dt;
+        pc.y += pc.vy * dt;
+        // light damping so it doesn't explode forever
+        pc.vx *= 0.92;
+        pc.vy *= 0.92;
+      }
+
+      if (!alive) puffs.splice(i, 1);
+    }
+
+    // Update bubbles
+    for (let i = bubbles.length - 1; i >= 0; i--) {
+      const b = bubbles[i];
+      b.t += dt;
+      b.x += b.vx * dt;
+      b.y += b.vy * dt;
+
+      // gentle sideways wobble
+      b.x += Math.sin((b.t * 3.5) + b.r) * 6 * dt;
+
+      if (b.t >= b.life || b.y + b.r < 0) bubbles.splice(i, 1);
+    }
+  }
+
+  function updateAmbientBubbles(dt) {
+    const w = W(), h = H();
+
+    for (const b of ambientBubbles) {
+      b.y += b.vy * dt;
+
+      // Gentle sideways wobble around the lane center
+      b.phase += dt * 1.5;
+      b.x = b.laneX
+        + Math.sin(b.phase + b.laneIndex) * (AMBIENT_X_JITTER * 0.8)
+        + rand(-0.6, 0.6); // tiny randomness
+
+      // Recycle when it exits the top
+      if (b.y + b.r < 0) {
+        b.y = h + rand(0, h * 0.15); // respawn slightly below bottom, staggered
+        b.r = rand(AMBIENT_R_MIN, AMBIENT_R_MAX);
+        b.vy = -rand(AMBIENT_RISE_MIN, AMBIENT_RISE_MAX);
+        b.phase = Math.random() * Math.PI * 2;
+      }
+    }
+  }
+
+  function initAmbientBubbles() {
+    ambientBubbles = [];
+    const w = W(), h = H();
+
+    for (let lane = 0; lane < AMBIENT_LANES; lane++) {
+      const laneX = ((lane + 0.5) / AMBIENT_LANES) * w;
+
+      for (let k = 0; k < AMBIENT_PER_LANE; k++) {
+        ambientBubbles.push(makeAmbientBubble(laneX, h, lane));
+      }
+    }
+  }
+
+  function makeAmbientBubble(laneX, h, laneIndex) {
+    return {
+      laneX,
+      laneIndex,
+      // Start staggered through the height so you see a steady stream immediately
+      x: laneX + rand(-AMBIENT_X_JITTER, AMBIENT_X_JITTER),
+      y: rand(0, h),
+      r: rand(AMBIENT_R_MIN, AMBIENT_R_MAX),
+      vy: -rand(AMBIENT_RISE_MIN, AMBIENT_RISE_MAX),
+      phase: Math.random() * Math.PI * 2
+    };
+  }
 
   function makeFish() {
     const s = rand(SCALE_MIN, SCALE_MAX);
@@ -379,6 +658,21 @@
     };
   }
 
+  let userInteracted = false;
+  wrap.addEventListener("pointerdown", () => { userInteracted = true; }, { passive: true });
+
+  function playPoofSfx() {
+    try {
+      if (sfxPoof.readyState < 2) sfxPoof.load(); // ensure it’s loaded
+      sfxPoof.pause();
+      sfxPoof.currentTime = 0;
+      const p = sfxPoof.play();
+      if (p && p.catch) p.catch(e => console.log("SFX play failed:", e));
+    } catch (e) {
+      console.log("SFX exception:", e);
+    }
+  }
+
   function setFishCount(target) {
     // target can be 0..MAX_FISH_CAP
     const t = clamp(Math.floor(target), 0, MAX_FISH_CAP);
@@ -386,8 +680,21 @@
     if (t === fish.length) return;
 
     if (t < fish.length) {
-      // remove fish from end
-      fish.length = t;
+      let poofPlayed = false;
+      // Remove fish one at a time so we can spawn an effect at the removed fish's position.
+      while (fish.length > t) {
+        // Remove a random fish so the effect appears in different places.
+        const idx = Math.floor(Math.random() * fish.length);
+        const removed = fish[idx];
+
+        // Swap-remove (fast): move last fish into idx, then pop.
+        fish[idx] = fish[fish.length - 1];
+        fish.pop();
+
+        // Spawn puff + bubbles where that fish disappeared.
+        spawnDespawnEffect(removed.x, removed.y, removed.scale);
+        if (!poofPlayed) { playPoofSfx(); poofPlayed = true; }
+      }
       return;
     }
 
@@ -425,6 +732,7 @@
     const cx = Math.floor(fx / CELL_SIZE);
     const cy = Math.floor(fy / CELL_SIZE);
     const out = [];
+    // Check the 3x3 neighborhood to keep separation O(n) overall.
     for (let y = cy - 1; y <= cy + 1; y++) {
       for (let x = cx - 1; x <= cx + 1; x++) {
         const arr = grid.get(gridKey(x, y));
@@ -446,6 +754,7 @@
     while (da < -Math.PI) da += 2 * Math.PI;
 
     const maxTurn = f.turnRate * dt;
+    // Limit turn rate to avoid instant heading flips; gives fish inertia.
     da = clamp(da, -maxTurn, maxTurn);
     const newA = curA + da;
 
@@ -457,6 +766,7 @@
   function limitSpeed(f, targetMax) {
     const sp = Math.hypot(f.vx, f.vy);
     if (sp < 0.0001) {
+      // If nearly stopped, kick with a small random nudge to avoid stagnation.
       const a = rand(-Math.PI, Math.PI);
       f.vx = Math.cos(a) * targetMax * 0.3;
       f.vy = Math.sin(a) * targetMax * 0.3;
@@ -475,16 +785,19 @@
   function update(dt) {
     const w = W(), h = H();
 
+    // Rebuild spatial grid each frame for separation queries.
     gridClear();
     for (let i = 0; i < fish.length; i++) gridInsert(i, fish[i].x, fish[i].y);
 
     for (let i = 0; i < fish.length; i++) {
       const f = fish[i];
 
+      // Occasionally pause a fish to add life; pauseT counts down.
       if (f.pauseT <= 0 && Math.random() < PAUSE_CHANCE_PER_SEC * dt) {
         f.pauseT = rand(PAUSE_MIN, PAUSE_MAX);
       }
 
+      // Wander introduces a slowly varying desired heading.
       f.wanderAngle += rand(-1, 1) * WANDER_JITTER * dt;
 
       const curA = Math.atan2(f.vy, f.vx);
@@ -505,7 +818,7 @@
         desiredVy += ay * WALL_AVOID_FORCE;
       }
 
-      // Separation
+      // Separation: push away from nearby fish inside SEP_RADIUS using grid neighbors.
       let sx = 0, sy = 0;
       const neighCells = gridNeighbors(f.x, f.y);
       const r2 = SEP_RADIUS * SEP_RADIUS;
@@ -543,6 +856,7 @@
         targetSpeed *= PAUSE_SLOWDOWN;
       }
 
+      // Smoothly rotate current velocity toward desired heading.
       steerTowardVelocity(f, desiredVx, desiredVy, dt);
 
       const curSp = Math.hypot(f.vx, f.vy) || 0.0001;
@@ -556,6 +870,7 @@
       f.x += f.vx * dt;
       f.y += f.vy * dt;
 
+      // Simple wall bounce to keep fish inside the tank.
       if (f.x < 0) { f.x = 0; f.vx = Math.abs(f.vx); }
       if (f.x > w) { f.x = w; f.vx = -Math.abs(f.vx); }
       if (f.y < 0) { f.y = 0; f.vy = Math.abs(f.vy); }
@@ -571,10 +886,76 @@
     }
   }
 
+  function drawBubbles() {
+    if (!bubbles.length) return;
+
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter"; // makes bubbles feel "glowy"
+    ctx.lineWidth = 1;
+
+    for (const b of bubbles) {
+      const t = clamp(b.t / b.life, 0, 1);
+      const alpha = (1 - t) * 0.55;
+
+      ctx.globalAlpha = alpha;
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
+      ctx.strokeStyle = "rgba(200,235,255,1)";
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  function drawPuffs() {
+    if (!puffs.length) return;
+
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+
+    for (const p of puffs) {
+      const t = clamp(p.t / p.life, 0, 1);
+      const alpha = (1 - t) * 0.65;
+      const r = lerp(PUFF_START_R, PUFF_END_R, t) * (0.7 + p.scale * 0.7);
+
+      ctx.globalAlpha = alpha;
+
+      for (const pc of p.pieces) {
+        ctx.beginPath();
+        ctx.arc(pc.x, pc.y, r * rand(0.65, 1.0), 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(220,245,255,1)";
+        ctx.fill();
+      }
+    }
+
+    ctx.restore();
+  }
+
+  function drawAmbientBubbles() {
+    if (!ambientBubbles.length) return;
+
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    ctx.globalAlpha = AMBIENT_ALPHA;
+    ctx.lineWidth = 1;
+
+    for (const b of ambientBubbles) {
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
+      ctx.strokeStyle = "rgba(200,235,255,1)";
+      ctx.stroke();
+    }
+
+    ctx.restore();
+  }
+
   function draw() {
     const w = W(), h = H();
     ctx.clearRect(0, 0, w, h);
 
+    drawAmbientBubbles();
+    drawBubbles();
+
+    // Painter's algorithm by scale to fake depth (smaller drawn first).
     const idx = fish.map((_, i) => i);
     idx.sort((a, b) => fish[a].scale - fish[b].scale);
 
@@ -592,7 +973,7 @@
       ctx.save();
       ctx.translate(f.x, f.y);
 
-      // Facing hysteresis
+      // Facing hysteresis prevents rapid flipping around zero velocity.
       if (f.vx >  FLIP_EPS) f.facing = 1;
       if (f.vx < -FLIP_EPS) f.facing = -1;
 
@@ -604,6 +985,7 @@
       ctx.rotate(tilt);
 
       if (useFallback) {
+        // Simple ellipse stand-in if sprites fail to load.
         ctx.globalAlpha = 0.75;
         ctx.beginPath();
         ctx.ellipse(0, 0, drawW * 0.45, drawH * 0.35, 0, 0, Math.PI * 2);
@@ -616,7 +998,9 @@
       ctx.restore();
     }
 
-    // vignette
+    drawPuffs();
+
+    // Vignette to darken edges and focus attention toward the center.
     const g = ctx.createRadialGradient(w/2, h/2, Math.min(w,h)*0.2, w/2, h/2, Math.max(w,h)*0.75);
     g.addColorStop(0, "rgba(0,0,0,0)");
     g.addColorStop(1, "rgba(0,0,0,0.28)");
@@ -641,8 +1025,10 @@
     acc += delta;
     while (acc >= DT) {
       update(DT);
+      updateEffects(DT);
+      updateAmbientBubbles(DT);
       acc -= DT;
-    }
+  }
 
     draw();
     requestAnimationFrame(loop);
@@ -662,6 +1048,7 @@
   }
 
   function tickMinuteAligned() {
+    // Update fish count on the minute boundary to stay in sync with real time.
     updateCountdownAndFish();
 
     const now = new Date();
@@ -670,19 +1057,120 @@
     setTimeout(tickMinuteAligned, delay);
   }
 
+  function getPacificTodayAndTomorrowKeys() {
+    const pac = getPacificComponents();
+    const todayKey = getPacificDateKey(pac);
+
+    // Add 1 calendar day in Pacific terms by using a Date and setDate(),
+    // then re-format in Pacific.
+    const now = new Date();
+    const tomorrow = new Date(now);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+
+    const formatter = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/Los_Angeles",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit"
+    });
+
+    const parts = formatter.formatToParts(tomorrow);
+    const get = type => parts.find(p => p.type === type).value;
+
+    const pacTomorrow = {
+      year: Number(get("year")),
+      month: Number(get("month")),
+      day: Number(get("day"))
+    };
+
+    const tomorrowKey = getPacificDateKey(pacTomorrow);
+    return { todayKey, tomorrowKey };
+  }
+
+  // =============================
+  // Audio Settings
+  // =============================
+
+  // ---- Gapless background loop via Web Audio ----
+  let audioCtx = null;
+  let bgGain = null;
+  let bgSource = null;
+  let bgBuffer = null;
+  let bgCtxReady = false;
+
+  async function ensureAudioContext() {
+    if (audioCtx) return;
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    bgGain = audioCtx.createGain();
+    bgGain.gain.value = 0; // will be set by applyAudioSettings()
+    bgGain.connect(audioCtx.destination);
+  }
+
+  // Call this after a user gesture (click/tap) to satisfy autoplay rules
+  async function ensureBgBufferLoaded() {
+    if (bgBuffer) return;
+    await ensureAudioContext();
+
+    const resp = await fetch("water-ambience.mp3");
+    if (!resp.ok) throw new Error("Failed to load water-ambience.mp3");
+    const arr = await resp.arrayBuffer();
+    bgBuffer = await audioCtx.decodeAudioData(arr);
+  }
+
+  function startBgLoopIfNeeded() {
+    if (!audioCtx || !bgBuffer) return;
+    if (bgSource) return; // already playing
+
+    bgSource = audioCtx.createBufferSource();
+    bgSource.buffer = bgBuffer;
+    bgSource.loop = true;
+
+    // Optional: if your file has a tiny dead lead-in/out, you can trim it with loop points:
+    // bgSource.loopStart = 0.02;
+    // bgSource.loopEnd = bgBuffer.duration - 0.02;
+
+    bgSource.connect(bgGain);
+    bgSource.start();
+    bgSource.onended = () => { bgSource = null; };
+  }
+
+  function stopBgLoop() {
+    if (!bgSource) return;
+    try { bgSource.stop(); } catch {}
+    bgSource = null;
+  }
+
   // =============================
   // Settings UI wiring
   // =============================
   const settingsBtn = document.getElementById("settings-btn");
   const settingsPanel = document.getElementById("settings-panel");
+
   const homeTimeInput = document.getElementById("home-time");
+  const homeDaySelect = document.getElementById("home-day");
+
   const settingsSaveBtn = document.getElementById("settings-save");
   const settingsCancelBtn = document.getElementById("settings-cancel");
 
+  const bgAudio = document.getElementById("bg-audio");
+  const sfxPoof = document.getElementById("sfx-poof");
+
+  const bgMuteBtn = document.getElementById("bg-mute");
+  const bgVolSlider = document.getElementById("bg-vol");
+  const sfxMuteBtn = document.getElementById("sfx-mute");
+  const sfxVolSlider = document.getElementById("sfx-vol");
+
   function openSettingsPanel() {
     const pac = getPacificComponents();
-    const s = getSettingsForToday(pac);
+    const { tomorrowKey } = getPacificTodayAndTomorrowKeys();
+    const s = getTargetSettings(pac);
+
     homeTimeInput.value = minutesToTimeString(s.homeMinutes);
+    homeDaySelect.value = (s.targetDate === tomorrowKey) ? "tomorrow" : "today";
+
+    applyAudioSettings();
+    ensureBgAudioStarted();
+
     settingsPanel.classList.remove("hidden");
   }
 
@@ -697,11 +1185,83 @@
       alert("Please enter a valid end time (H).");
       return;
     }
-    const pac = getPacificComponents();
-    saveSettingsForToday(pac, homeMinutes);
+
+    const { todayKey, tomorrowKey } = getPacificTodayAndTomorrowKeys();
+    const targetDate = (homeDaySelect.value === "tomorrow") ? tomorrowKey : todayKey;
+
+    saveTargetSettings(targetDate, homeMinutes);
+
     closeSettingsPanel();
     updateCountdownAndFish();
   }
+
+  let audioSettings = loadAudioSettings();
+
+  function applyAudioSettings() {
+    // BG (WebAudio)
+    if (bgGain) {
+      const vol = audioSettings.bgMuted ? 0 : audioSettings.bgVol;
+      bgGain.gain.value = vol;
+    }
+
+    // SFX (HTMLAudio)
+    sfxPoof.volume = audioSettings.sfxVol;
+    sfxPoof.muted = audioSettings.sfxMuted;
+
+    bgMuteBtn.textContent = audioSettings.bgMuted ? "Unmute" : "Mute";
+    sfxMuteBtn.textContent = audioSettings.sfxMuted ? "Unmute" : "Mute";
+
+    bgVolSlider.value = Math.round(audioSettings.bgVol * 100);
+    sfxVolSlider.value = Math.round(audioSettings.sfxVol * 100);
+  }
+
+  let bgStarted = false;
+  async function ensureBgAudioStarted() {
+    try {
+      await ensureBgBufferLoaded();
+      if (audioCtx.state === "suspended") await audioCtx.resume();
+      startBgLoopIfNeeded();
+      bgStarted = true;
+      applyAudioSettings();
+    } catch {
+      // If this fails, it’ll usually be because user gesture hasn’t happened yet.
+    }
+  }
+
+  wrap.addEventListener("pointerdown", () => {
+    applyAudioSettings();
+    ensureBgAudioStarted();
+  }, { passive: true });
+
+  wrap.addEventListener("pointerdown", () => {
+    ensureBgAudioStarted();
+  }, { passive: true });
+
+  bgMuteBtn.addEventListener("click", () => {
+    audioSettings.bgMuted = !audioSettings.bgMuted;
+    saveAudioSettings(audioSettings);
+    applyAudioSettings();
+    ensureBgAudioStarted();
+  });
+
+  sfxMuteBtn.addEventListener("click", () => {
+    audioSettings.sfxMuted = !audioSettings.sfxMuted;
+    saveAudioSettings(audioSettings);
+    applyAudioSettings();
+  });
+
+  bgVolSlider.addEventListener("input", () => {
+    audioSettings.bgVol = clamp(Number(bgVolSlider.value) / 100, 0, 1);
+    saveAudioSettings(audioSettings);
+    applyAudioSettings();
+    ensureBgAudioStarted();
+  });
+
+  sfxVolSlider.addEventListener("input", () => {
+    audioSettings.sfxVol = clamp(Number(sfxVolSlider.value) / 100, 0, 1);
+    saveAudioSettings(audioSettings);
+    applyAudioSettings();
+  });
 
   settingsBtn.addEventListener("click", () => {
     if (settingsPanel.classList.contains("hidden")) openSettingsPanel();
