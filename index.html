@@ -162,6 +162,7 @@
     <button id="lock-lunch-btn" type="button">Freeze Checkpoint</button>
     <button id="reset-lunch-btn" type="button">Reset Checkpoint</button>
     <button id="set-lunch-manual-btn" type="button">Manually Set Checkpoint</button>
+    <button id="go-aquarium-btn" type="button">Aquarium</button>
 </div>
 
 <!-- Top-right settings gear -->
@@ -431,6 +432,9 @@
     document.getElementById("lock-lunch-btn").addEventListener("click", lockLunchNow);
     document.getElementById("reset-lunch-btn").addEventListener("click", resetLunchForToday);
     document.getElementById("set-lunch-manual-btn").addEventListener("click", setLunchManual);
+    document.getElementById("go-aquarium-btn").addEventListener("click", () => {
+    window.location.href = "aquarium.html"; // change to your actual aquarium file path
+    });
 
     const settingsBtn      = document.getElementById("settings-btn");
     const settingsPanel    = document.getElementById("settings-panel");
