@@ -464,6 +464,20 @@
   let decor = []; // { kind, x, y, scale, depth, layer } layer: "back"|"mid"|"front"
 
   // =============================
+  // Light rays (subtle)
+  // =============================
+  const RAYS_ENABLED = true;
+  const RAY_ALPHA = 0.5;       // keep low
+  const RAY_SPEED = 4;          // px/sec drift
+  const RAY_COUNT = 12;          // how many bands across
+  const RAY_SOFTNESS = 200;     // blur-ish width in px (bigger = softer)
+  let rayT = 0;
+
+  let raysCanvas = null;
+  let raysCtx = null;
+  let raysW = 0, raysH = 0;
+
+  // =============================
   // Canvas setup
   // =============================
   const wrap = document.getElementById("wrap");
@@ -486,11 +500,13 @@
   window.addEventListener("resize", () => {
     resizeCanvas();
     initAmbientBubbles();
+    initLightRays();
     rebuildSceneryCaches();
   }, { passive: true });
 
   resizeCanvas();
   initAmbientBubbles();
+  initLightRays();
   rebuildSceneryCaches();
 
 
@@ -697,10 +713,10 @@
         });
       }
 
-      const stoneR = baseR * 1.15; // claim a little extra space than the visual blob
+      const stoneR = baseR * 3; // claim a little extra space than the visual blob
       const pos = findSpot(
         stoneR, layer, "stone",
-        w * 0.08, w * 0.92,
+        w * 0.2, w * 0.92,
         floorY - bandH * 0.25, floorY + bandH * 0.12
       );
 
@@ -911,6 +927,46 @@
       vy: -rand(AMBIENT_RISE_MIN, AMBIENT_RISE_MAX),
       phase: Math.random() * Math.PI * 2
     };
+  }
+
+  function initLightRays() {
+    if (!RAYS_ENABLED) return;
+
+    const w = W(), h = H();
+    raysW = w * 1.5;   // match tank width for clean coverage
+    raysH = h + 200;   // match tank height
+
+    raysCanvas = document.createElement("canvas");
+    raysCanvas.width = raysW;
+    raysCanvas.height = raysH;
+    raysCtx = raysCanvas.getContext("2d");
+
+    const c = raysCtx;
+    c.clearRect(0, 0, raysW, raysH);
+
+    // Rays: long diagonal bands built from soft gradients (no per-frame jitter)
+    const spacing = raysW / RAY_COUNT;
+    const angle = .3; // radians-ish tilt; small negative = slant left
+    c.save();
+    c.translate(raysW * 0.5, 0);
+    c.rotate(angle);
+    c.translate(-raysW * 0.5, -200);
+
+    for (let i = -2; i < RAY_COUNT + 2; i++) {
+      const x = i * spacing + spacing * 0.5;
+
+      const g = c.createLinearGradient(x - RAY_SOFTNESS, 0, x + RAY_SOFTNESS, 0);
+      g.addColorStop(0.0, "rgba(255,255,255,0)");
+      g.addColorStop(0.45, "rgba(255,255,255,0.06)");
+      g.addColorStop(0.50, "rgba(255,255,255,0.25)");
+      g.addColorStop(0.55, "rgba(255,255,255,0.06)");
+      g.addColorStop(1.0, "rgba(255,255,255,0)");
+
+      c.fillStyle = g;
+      c.fillRect(x - RAY_SOFTNESS, 0, RAY_SOFTNESS * 2, raysH);
+    }
+
+    c.restore();
   }
 
   function makeFish() {
@@ -1269,7 +1325,7 @@
     ctx.save();
     ctx.translate(d.x, d.y);
 
-    const alpha = lerp(0.45, 0.92, d.depth);
+    const alpha = lerp(0.65, 0.9, d.depth);
     ctx.strokeStyle = `rgba(255, 120, 160, ${1 * alpha})`;
     ctx.lineWidth = 5 * d.scale;
     ctx.lineCap = "round";
@@ -1306,6 +1362,32 @@
   function draw() {
     const w = W(), h = H();
     ctx.clearRect(0, 0, w, h);
+
+    // Light rays (very subtle, animated by shifting a pre-rendered texture)
+    if (RAYS_ENABLED && raysCanvas) {
+      rayT += DT;
+      const drift = (rayT * RAY_SPEED) % raysW;
+
+      ctx.save();
+      ctx.globalCompositeOperation = "screen"; // brightens without harsh white
+      ctx.globalAlpha = RAY_ALPHA;
+
+      // tile twice for seamless wrap
+      ctx.drawImage(raysCanvas, -drift, 0, raysW, raysH);
+      ctx.drawImage(raysCanvas, -drift + raysW, 0, raysW, raysH);
+
+      // fade rays with depth (stronger near top)
+      const w = W(), h = H();
+      const fade = ctx.createLinearGradient(0, 0, 0, h);
+      fade.addColorStop(0.0, "rgba(255,255,255,1)");
+      fade.addColorStop(0.55, "rgba(255,255,255,0.35)");
+      fade.addColorStop(1.0, "rgba(255,255,255,0)");
+      ctx.globalCompositeOperation = "destination-in";
+      ctx.fillStyle = fade;
+      ctx.fillRect(0, 0, w, h);
+
+      ctx.restore();
+    }
 
     drawAmbientBubbles();
     drawBubbles();
