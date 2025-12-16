@@ -497,10 +497,10 @@
   // Light rays (subtle)
   // =============================
   const RAYS_ENABLED = true;
-  const RAY_ALPHA = 0.5;       // keep low
-  const RAY_SPEED = 3;          // px/sec drift
+  const RAY_ALPHA = 0.5;         // keep low
+  const RAY_SPEED_FRAC = .03;    // speed relative to width
   const RAY_COUNT = 40;          // how many bands across
-  const RAY_SOFTNESS = 250;     // blur-ish width in px (bigger = softer)
+  const RAY_SOFTNESS = 250;      // blur-ish width in px (bigger = softer)
   let rayT = 0;
 
   let raysCanvas = null;
@@ -1395,8 +1395,8 @@
 
     // Light rays (very subtle, animated by shifting a pre-rendered texture)
     if (RAYS_ENABLED && raysCanvas) {
-      rayT += DT;
-      const drift = (rayT * RAY_SPEED) % raysW;
+      const raySpeedPx = W() * RAY_SPEED_FRAC;
+      const drift = (rayT * raySpeedPx) % raysW;
 
       ctx.save();
       ctx.globalCompositeOperation = "screen"; // brightens without harsh white
@@ -1514,6 +1514,9 @@
       update(DT);
       updateEffects(DT);
       updateAmbientBubbles(DT);
+
+      if (RAYS_ENABLED) rayT += DT;
+
       acc -= DT;
   }
 
